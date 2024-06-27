@@ -1,0 +1,9 @@
+/node_modules
+/lib
+/example/node_modules
+/example/build
+.env
+.npmrc
+service-account.json
+/rtc-backend
+/example
