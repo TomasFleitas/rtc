@@ -8,7 +8,7 @@ const storage = new Storage({
 
 const bucketName = process.env.BUCKET_NAME;
 const filePath = './lib/cjs-min/index.min.js';
-const destination = 'sdk.js';
+const destination = '@ewents-rtc.js';
 
 async function uploadFile() {
   await storage.bucket(bucketName).upload(filePath, {
@@ -17,4 +17,4 @@ async function uploadFile() {
   console.log(`${filePath} uploaded to ${bucketName} as ${destination}`);
 }
 
-uploadFile().catch(console.error);
+/* uploadFile().catch(console.error); */
