@@ -1,39 +1,8 @@
-type PeerType = 'unknown' | 'answerer' | 'offerer';
-
-type OnReceiveMessageParams = (message: any) => void;
-
-type InnerStateChangeParams = (state: RTCPeerConnectionState) => void;
-
-type OnReceiveMediaStream = (value: {
-  type: 'host' | 'remote';
-  stream: MediaStream;
-}) => void;
-
-type OnReceiveFile = (value: {
-  fileId: number;
-  size: number;
-  percentage: number;
-  chunkSize: number;
-  done: boolean;
-  file?: Blob;
-  fileName: string;
-}) => void;
-
-type ConstructorParams = {
-  clientKey: string;
-  peerId: string;
-  baseUrl?: string;
-  onReceiveData?: OnReceiveMessageParams;
-  onReceiveFile?: OnReceiveFile;
-  onReceiveMediaStream?: OnReceiveMediaStream;
-  onConnectionStateChange?: InnerStateChangeParams;
-};
-
 export class WebRTC {
   private peerConnection: RTCPeerConnection;
   private offerId: string;
   private answererId: string;
-  private baseUrl = 'ws://rtc.ewents.io';
+  private baseUrl = 'wss://rtc.ewents.io';
   private clientKey: string;
   private isOfferer = true;
   private channelId: string;
@@ -85,6 +54,10 @@ export class WebRTC {
       throw Error('baseUrl is required.');
     }
     window.addEventListener('beforeunload', this.closeConnection.bind(this));
+  }
+
+  public getChannelId() {
+    return this.channelId;
   }
 
   public peerType(): PeerType {
@@ -153,40 +126,10 @@ export class WebRTC {
 
   public sendFile(file: File) {
     if (this.isConnected()) {
-      const allowedFileTypes = [
-        'image/jpeg',
-        'image/png',
-        'image/gif',
-        'image/bmp',
-        'image/webp',
-        'image/svg+xml',
-        'audio/mpeg',
-        'audio/wav',
-        'audio/ogg',
-        'audio/aac',
-        'audio/webm',
-        'text/plain',
-        'text/html',
-        'text/css',
-        'text/javascript',
-        'text/xml',
-        'text/csv',
-        'application/pdf',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/vnd.ms-powerpoint',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        'application/zip',
-        'application/x-7z-compressed',
-        'application/x-rar-compressed',
-      ];
-
-      if (!allowedFileTypes.includes(file.type)) {
+      /* if (!allowedFileTypes.includes(file.type)) {
         console.error('File type not allowed:', file.type);
         return;
-      }
+      } */
 
       const chunkSize = 16384;
       const fileReader = new FileReader();
@@ -250,20 +193,32 @@ export class WebRTC {
     }
   }
 
-  public async setMediaTrack(
-    track: MediaStreamTrack,
+  public async setMediaTracks(
+    { audioTrack, videoTrack }: Tracks,
     mediaStream: MediaStream,
   ) {
+    const tracks: MediaStreamTrack[] = [];
+
+    if (audioTrack) {
+      tracks.push(audioTrack);
+    }
+
+    if (videoTrack) {
+      tracks.push(videoTrack);
+    }
+
     if (this.isConnected()) {
-      const existingSender = this.senders.get(track.kind);
-      if (existingSender) {
-        // Replace the existing track
-        existingSender.replaceTrack(track);
-      } else {
-        // Add a new track
-        const sender = this.peerConnection.addTrack(track, mediaStream);
-        this.senders.set(track.kind, sender);
-      }
+      tracks.forEach((track) => {
+        const existingSender = this.senders.get(track.kind);
+        if (existingSender) {
+          // Replace the existing track
+          existingSender.replaceTrack(track);
+        } else {
+          // Add a new track
+          const sender = this.peerConnection.addTrack(track, mediaStream);
+          this.senders.set(track.kind, sender);
+        }
+      });
 
       this.renegotiateConnection();
 
@@ -286,8 +241,6 @@ export class WebRTC {
         }
         this.senders.delete(kind);
       }
-
-      this.renegotiateConnection();
     }
   }
 
@@ -355,13 +308,17 @@ export class WebRTC {
   }
 
   private connectWebSocket() {
-    this.ws?.close();
-    this.ws = new WebSocket(`${this.baseUrl}?client-key=${this.clientKey}`);
-    this.ws.onclose = ({ code, reason }) => {
-      if (code === 1008) console.error(reason);
-    };
-    this.ws.onmessage = this.onMessage.bind(this);
-    this.ws.onopen = () => this.checkAndSendOffer();
+    try {
+      this.ws?.close();
+      this.ws = new WebSocket(`${this.baseUrl}?client-key=${this.clientKey}`);
+      this.ws.onclose = ({ code, reason }) => {
+        if (code === 1008) console.error(reason);
+      };
+      this.ws.onmessage = this.onMessage.bind(this);
+      this.ws.onopen = () => this.checkAndSendOffer();
+    } catch (error) {
+      console.log(error);
+    }
   }
 
   private setOnTrack() {
@@ -376,7 +333,7 @@ export class WebRTC {
   }
 
   private async checkAndSendOffer(renegotiate = false) {
-    if (!renegotiate) {
+    if (!renegotiate || this.innerChannel.readyState !== 'open') {
       this.setupDataChannels();
     }
 
