@@ -1,3 +1,45 @@
+type PeerType = 'unknown' | 'answerer' | 'offerer';
+
+type OnReceiveMessageParams = (message: any) => void;
+
+type InnerStateChangeParams = (state: RTCPeerConnectionState) => void;
+
+type OnReceiveMediaStream = (stream: MediaStream) => void;
+
+type OnReceiveFile = (value: {
+  fileId: number;
+  size: number;
+  percentage: number;
+  chunkSize: number;
+  done: boolean;
+  file?: Blob;
+  fileName: string;
+}) => void;
+
+type ConstructorParams = {
+  clientKey: string;
+  peerId: string;
+  baseUrl?: string;
+  onReceiveData?: OnReceiveMessageParams;
+  onReceiveFile?: OnReceiveFile;
+  onReceiveMediaStream?: OnReceiveMediaStream;
+  onConnectionStateChange?: InnerStateChangeParams;
+};
+
+type Tracks = {
+  audioTrack?: MediaStreamTrack;
+  videoTrack?: MediaStreamTrack;
+};
+
+type TempCallback = (v?: { ms?: number; percentage?: number }) => void;
+
+type TempTransferData = {
+  type: 'data' | 'file';
+  timestamp?: number;
+  callback?: TempCallback;
+  resolve?: TempCallback;
+};
+
 export class WebRTC {
   private peerConnection: RTCPeerConnection;
   private offerId: string;
@@ -15,6 +57,8 @@ export class WebRTC {
   private innerOnReceiveFile: OnReceiveFile[] = new Array(2);
   private innerOnReceiveMediaStream: OnReceiveMediaStream[] = new Array(2);
   private senders: Map<string, RTCRtpSender> = new Map();
+  private tempTransferData: Map<string, TempTransferData> = new Map();
+  private mediaCallback: ((() => void) | undefined)[] = new Array(2);
 
   constructor({
     baseUrl,
@@ -118,14 +162,31 @@ export class WebRTC {
     window.removeEventListener('beforeunload', this.closeConnection.bind(this));
   }
 
-  public sendData(data: any) {
-    if (this.isConnected()) {
-      this.dataChannel.send(JSON.stringify({ type: 'data', data }));
-    }
+  public async sendData(data: any, callback?: TempTransferData['callback']) {
+    return new Promise<{ ms?: number } | undefined>((resolve, reject) => {
+      if (this.isConnected()) {
+        const id = this.generateId();
+
+        this.tempTransferData.set(id, {
+          type: data,
+          timestamp: new Date().getTime(),
+          callback,
+          resolve,
+        });
+
+        this.dataChannel.send(JSON.stringify({ type: 'data', data, id }));
+      } else {
+        reject('Not connected');
+      }
+    });
   }
 
-  public sendFile(file: File) {
+  public sendFile(
+    file: File,
+    callback?: ({ percentage }: { percentage: number }) => void,
+  ) {
     if (this.isConnected()) {
+      // Validate files
       /* if (!allowedFileTypes.includes(file.type)) {
         console.error('File type not allowed:', file.type);
         return;
@@ -134,7 +195,12 @@ export class WebRTC {
       const chunkSize = 16384;
       const fileReader = new FileReader();
       let offset = 0;
-      const fileId = this.generateFileId();
+      const fileId = this.generateId();
+
+      this.tempTransferData.set(fileId, {
+        type: 'file',
+        callback,
+      });
 
       fileReader.addEventListener('error', (error) =>
         console.error('Error reading file:', error),
@@ -196,39 +262,43 @@ export class WebRTC {
   public async setMediaTracks(
     { audioTrack, videoTrack }: Tracks,
     mediaStream: MediaStream,
+    callback?: () => void,
   ) {
-    const tracks: MediaStreamTrack[] = [];
+    return new Promise<void>((resolve, reject) => {
+      const tracks: MediaStreamTrack[] = [];
 
-    if (audioTrack) {
-      tracks.push(audioTrack);
-    }
+      if (audioTrack) {
+        tracks.push(audioTrack);
+      }
 
-    if (videoTrack) {
-      tracks.push(videoTrack);
-    }
+      if (videoTrack) {
+        tracks.push(videoTrack);
+      }
 
-    if (this.isConnected()) {
-      tracks.forEach((track) => {
-        const existingSender = this.senders.get(track.kind);
-        if (existingSender) {
-          // Replace the existing track
-          existingSender.replaceTrack(track);
+      if (this.isConnected()) {
+        if (tracks.length) {
+          tracks.forEach((track) => {
+            const existingSender = this.senders.get(track.kind);
+            if (existingSender) {
+              // Replace the existing track
+              existingSender.replaceTrack(track);
+            } else {
+              // Add a new track
+              const sender = this.peerConnection.addTrack(track, mediaStream);
+              this.senders.set(track.kind, sender);
+            }
+          });
+
+          this.mediaCallback[0] = resolve;
+          this.mediaCallback[1] = callback;
+          this.renegotiateConnection();
         } else {
-          // Add a new track
-          const sender = this.peerConnection.addTrack(track, mediaStream);
-          this.senders.set(track.kind, sender);
+          reject('Not tracks provided.');
         }
-      });
-
-      this.renegotiateConnection();
-
-      this.innerOnReceiveMediaStream.forEach((callback) =>
-        callback?.({
-          type: 'host',
-          stream: mediaStream,
-        }),
-      );
-    }
+      } else {
+        reject('Not connected');
+      }
+    });
   }
 
   public removeMediaTrack(kind: 'audio' | 'video') {
@@ -300,11 +370,9 @@ export class WebRTC {
     this.checkAndSendOffer(true);
   }
 
-  private generateFileId(): string {
-    return (
-      Math.random().toString(36).substring(2, 15) +
-      Math.random().toString(36).substring(2, 15)
-    );
+  private generateId(): string {
+    const generatePart = () => Math.random().toString(36).substring(2, 15);
+    return generatePart() + generatePart() + generatePart() + generatePart();
   }
 
   private connectWebSocket() {
@@ -323,11 +391,9 @@ export class WebRTC {
 
   private setOnTrack() {
     this.peerConnection.ontrack = (event) => {
+      this.innerChannel.send(JSON.stringify({ type: 'media-started' }));
       this.innerOnReceiveMediaStream.forEach((callback) =>
-        callback?.({
-          type: 'remote',
-          stream: event.streams[0],
-        }),
+        callback?.(event.streams[0]),
       );
     };
   }
@@ -544,6 +610,38 @@ export class WebRTC {
         this.closeConnection();
         this.innerStateChange.forEach((callback) => callback?.('closed'));
       }
+
+      if (data.type === 'media-started') {
+        this.mediaCallback.forEach((callback) => callback?.());
+      }
+
+      if (data.type === 'delivery-validation') {
+        const { id, info } = data;
+
+        const tempData = this.tempTransferData.get(id);
+        if (tempData) {
+          let delivered = {};
+
+          if (tempData.type === 'data') {
+            delivered = {
+              ms: new Date().getTime() - (tempData!.timestamp || 0),
+            };
+            this.tempTransferData.delete(id);
+          }
+
+          if (tempData.type === 'file') {
+            delivered = {
+              percentage: info.percentage,
+            };
+            if (info.percentage === 100) {
+              this.tempTransferData.delete(id);
+            }
+          }
+
+          tempData.resolve?.(delivered);
+          tempData.callback?.(delivered);
+        }
+      }
     };
 
     this.innerChannel = innerChannel;
@@ -591,6 +689,14 @@ export class WebRTC {
           done,
         };
 
+        this.innerChannel.send(
+          JSON.stringify({
+            type: 'delivery-validation',
+            id: fileId,
+            info: { percentage },
+          }),
+        );
+
         if (done) {
           const fileBlob = new Blob(receivedFiles[fileId].chunks, {
             type: fileType,
@@ -627,6 +733,9 @@ export class WebRTC {
 
       /* COMMON DATA TRANSFER */
       if (data.type === 'data') {
+        this.innerChannel.send(
+          JSON.stringify({ type: 'delivery-validation', id: data.id }),
+        );
         this.innerOnMessage.forEach((callback) => callback?.(data.data));
       }
     };
