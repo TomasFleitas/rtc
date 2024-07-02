@@ -37,6 +37,7 @@ CurrentUser needs to connect with User1, User2, and User3.
 ```javascript
 const webRTC = new WebRTC({
   peerId: peer1-id, // Unique identifier of current peer (Peer1)
+  clientKey: '66760d2b14813c0e8b53b4ff', // Default client key (it will be deleted in the future).
   onReceiveData: (data) => {}, // Data from Peer2
   onReceiveFile: ({ fileName, percentage, file }) => {}, // File from Peer2
   onConnectionStateChange: (state) => {}, // Connection state from Peer2
@@ -50,6 +51,7 @@ Same as Peer1, but you should change the peerId and the id that you pass to the 
 ```javascript
 const webRTC = new WebRTC({
   peerId: peer2-id, // Unique identifier of current peer (Peer2)
+  clientKey: '66760d2b14813c0e8b53b4ff', // Default client key (it will be deleted in the future).
   ... // same as Peer1
 });
 webRTC.startConnection(peer1-id); // start connection with Peer1
