@@ -17,7 +17,14 @@
     "type": "git",
     "url": "git+https://github.com/TomasFleitas/rtc"
   },
-  "keywords": [],
+  "keywords": [
+    "rtc",
+    "WebRTC",
+    "peer-to-peer",
+    "Real-Time Communication",
+    "Ewents",
+    "peers"
+  ],
   "files": [
     "/lib"
   ],
