@@ -115,6 +115,7 @@ or get tracks:
  webRTC.getMediaTrack('video');
  ```
  * closeConnection
+
  This method just closes the connection between peers.
  ```javascript
   webRTC.closeConnection();
