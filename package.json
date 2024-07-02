@@ -1,5 +1,5 @@
 {
-  "name": "@ewents/rtc",
+  "name": "ewents-rtc",
   "version": "1.0.0",
   "description": "",
   "main": "./lib/cjs/index.js",
@@ -11,13 +11,11 @@
     "build:esm": "tsc",
     "build:cjs": "tsc --module commonjs --outDir lib/cjs",
     "build:rollup": "rollup -c",
-    "postpublish": "node postpublish.js",
-    "set:cors": "gsutil cors set cors.json gs://gueno-sdk",
     "dev": "nodemon"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TomasFleitas/gueno-sdk"
+    "url": "git+https://github.com/TomasFleitas/rtc"
   },
   "keywords": [],
   "files": [
