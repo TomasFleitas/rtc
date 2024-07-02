@@ -19,7 +19,7 @@ type OnReceiveFile = (value: {
 type ConstructorParams = {
   clientKey: string;
   peerId: string;
-  baseUrl?: string;
+  orchestratorUrl?: string;
   onReceiveData?: OnReceiveMessageParams;
   onReceiveFile?: OnReceiveFile;
   onReceiveMediaStream?: OnReceiveMediaStream;
@@ -44,7 +44,7 @@ export class WebRTC {
   private peerConnection: RTCPeerConnection;
   private offerId: string;
   private answererId: string;
-  private baseUrl = 'wss://rtc.ewents.io';
+  private orchestratorUrl = 'wss://rtc.ewents.io';
   private clientKey: string;
   private isOfferer = true;
   private channelId: string;
@@ -61,7 +61,7 @@ export class WebRTC {
   private mediaCallback: ((() => void) | undefined)[] = new Array(2);
 
   constructor({
-    baseUrl,
+    orchestratorUrl,
     peerId,
     onReceiveData,
     onReceiveFile,
@@ -69,7 +69,7 @@ export class WebRTC {
     onConnectionStateChange,
     clientKey,
   }: ConstructorParams) {
-    this.baseUrl = baseUrl ?? this.baseUrl;
+    this.orchestratorUrl = orchestratorUrl ?? this.orchestratorUrl;
     this.clientKey = clientKey;
     this.offerId = peerId;
 
@@ -94,8 +94,8 @@ export class WebRTC {
       throw Error('Peer is required.');
     }
 
-    if (!this.baseUrl) {
-      throw Error('baseUrl is required.');
+    if (!this.orchestratorUrl) {
+      throw Error('orchestratorUrl  is required.');
     }
     window.addEventListener('beforeunload', this.closeConnection.bind(this));
   }
@@ -378,7 +378,9 @@ export class WebRTC {
   private connectWebSocket() {
     try {
       this.ws?.close();
-      this.ws = new WebSocket(`${this.baseUrl}?client-key=${this.clientKey}`);
+      this.ws = new WebSocket(
+        `${this.orchestratorUrl}?client-key=${this.clientKey}`,
+      );
       this.ws.onclose = ({ code, reason }) => {
         if (code === 1008) console.error(reason);
       };
