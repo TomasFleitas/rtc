@@ -43,7 +43,7 @@ CurrentUser needs to connect with User1, User2, and User3.
 const webRTC = new WebRTC({
   peerId: peer1-id, // Unique identifier of current peer (Peer1) (optional)
   isSecure: true // if is true, the method startConnection will return a unique secure code to connect with the other peer (optional)
-  clientKey: '66760d2b14813c0e8b53b4ff', // Default client key (it will be deleted in the future).
+  clientKey: '66760d2b14813c0e8b53b4ff', // Default client key (it will be deleted in the future). (Mandatory)
   onReceiveData: (data) => {}, // Data from Peer2 (optional)
   isLog: true, // Allows internal logs to be printed for debugging and monitoring. (optional)
   onReceiveFile: ({ fileName, percentage, file }) => {}, // File from Peer2 (optional)
