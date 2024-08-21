@@ -6,4 +6,6 @@
 .npmrc
 service-account.json
 /rtc-backend
+/rtc-scan
 /example
+/rtc-web-scan

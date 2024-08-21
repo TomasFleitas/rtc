@@ -1,12 +1,10 @@
+import { ERRORS_CODES, WAIT_TIME } from '../utilities/constants';
+
 type PeerType = 'unknown' | 'answerer' | 'offerer';
 
-type OnReceiveMessageParams = (message: any) => void;
+type OnReceived<T> = (data: T) => void;
 
-type InnerStateChangeParams = (state: RTCPeerConnectionState) => void;
-
-type OnReceiveMediaStream = (stream: MediaStream) => void;
-
-type OnReceiveFile = (value: {
+type FileTransfer = {
   fileId: number;
   size: number;
   percentage: number;
@@ -14,16 +12,25 @@ type OnReceiveFile = (value: {
   done: boolean;
   file?: Blob;
   fileName: string;
-}) => void;
+};
+
+type CommunicationState = 'weak' | 'full' | 'connecting' | 'none';
 
 type ConstructorParams = {
   clientKey: string;
-  peerId: string;
+  isSecure?: boolean;
+  isLog?: boolean;
+  secureCode?: string;
+  peerId?: string;
   orchestratorUrl?: string;
-  onReceiveData?: OnReceiveMessageParams;
-  onReceiveFile?: OnReceiveFile;
-  onReceiveMediaStream?: OnReceiveMediaStream;
-  onConnectionStateChange?: InnerStateChangeParams;
+  onReceiveData?: OnReceived<any>;
+  onReceiveFile?: OnReceived<FileTransfer>;
+  onReceiveMediaStream?: OnReceived<MediaStream>;
+  /**
+   * @deprecated This method is deprecated and will be removed in future releases. Use `onCommunicationState` instead.
+   */
+  onConnectionStateChange?: OnReceived<RTCPeerConnectionState>;
+  onCommunicationState?: OnReceived<CommunicationState>;
 };
 
 type Tracks = {
@@ -32,6 +39,7 @@ type Tracks = {
 };
 
 type TempCallback = (v?: { ms?: number; percentage?: number }) => void;
+type UniqueCodeCallback = (code: string) => void;
 
 type TempTransferData = {
   type: 'data' | 'file';
@@ -40,25 +48,35 @@ type TempTransferData = {
   resolve?: TempCallback;
 };
 
+type RejectProps = { code: number; reason: string };
+
 export class WebRTC {
   private peerConnection: RTCPeerConnection;
-  private offerId: string;
+  private offerId?: string;
   private answererId: string;
   private orchestratorUrl = 'wss://rtc.ewents.io';
   private clientKey: string;
   private isOfferer = true;
-  private channelId: string;
+  private isLog?: boolean = false;
+  private secureCode?: string;
+  private isSecure?: boolean;
+  private channelId?: string;
   private dataChannel: RTCDataChannel;
   private innerChannel: RTCDataChannel;
   private fileChannel: RTCDataChannel;
   private ws: WebSocket;
-  private innerStateChange: InnerStateChangeParams[] = new Array(2);
-  private innerOnMessage: OnReceiveMessageParams[] = new Array(2);
-  private innerOnReceiveFile: OnReceiveFile[] = new Array(2);
-  private innerOnReceiveMediaStream: OnReceiveMediaStream[] = new Array(2);
+  private innerStateChange: OnReceived<RTCPeerConnectionState>[] = new Array(2);
+  private innerOnMessage: OnReceived<any>[] = new Array(2);
+  private innerOnReceiveFile: OnReceived<FileTransfer>[] = new Array(2);
+  private innerOnReceiveMediaStream: OnReceived<MediaStream>[] = new Array(2);
+  private innerOnCommunicationState: OnReceived<CommunicationState>[] =
+    new Array(2);
   private senders: Map<string, RTCRtpSender> = new Map();
   private tempTransferData: Map<string, TempTransferData> = new Map();
-  private mediaCallback: ((() => void) | undefined)[] = new Array(2);
+  private mediaCallback: (((v: string) => void) | undefined)[] = new Array(2);
+  private communicationState: CommunicationState = 'none';
+  private connectionTimeoutId: NodeJS.Timeout | null = null;
+  private uniqueCodeCallback: (UniqueCodeCallback | undefined)[] = new Array(2);
 
   constructor({
     orchestratorUrl,
@@ -67,10 +85,17 @@ export class WebRTC {
     onReceiveFile,
     onReceiveMediaStream,
     onConnectionStateChange,
+    onCommunicationState,
     clientKey,
+    isSecure = false,
+    isLog = false,
+    secureCode,
   }: ConstructorParams) {
     this.orchestratorUrl = orchestratorUrl ?? this.orchestratorUrl;
     this.clientKey = clientKey;
+    this.isSecure = isSecure;
+    this.isLog = isLog;
+    this.secureCode = secureCode;
     this.offerId = peerId;
 
     if (onReceiveData) {
@@ -85,13 +110,12 @@ export class WebRTC {
     if (onConnectionStateChange) {
       this.innerStateChange[0] = onConnectionStateChange;
     }
+    if (onCommunicationState) {
+      this.innerOnCommunicationState[0] = onCommunicationState;
+    }
 
     if (!this.clientKey) {
       throw Error('clientKey is required.');
-    }
-
-    if (!this.offerId) {
-      throw Error('Peer is required.');
     }
 
     if (!this.orchestratorUrl) {
@@ -123,18 +147,29 @@ export class WebRTC {
   }
 
   public isConnected(): boolean {
-    return this.peerConnection?.connectionState === 'connected';
+    return (
+      this.peerConnection?.connectionState === 'connected' ||
+      ['weak', 'full'].includes(this.communicationState)
+    );
   }
 
-  public onReceiveData(callback: OnReceiveMessageParams) {
+  public onReceiveData(callback: OnReceived<any>) {
     this.innerOnMessage[1] = callback;
   }
-  public onReceivedFile(callback: OnReceiveFile) {
+  public onReceivedFile(callback: OnReceived<FileTransfer>) {
     this.innerOnReceiveFile[1] = callback;
   }
-  public onReceiveMediaStream(callback: OnReceiveMediaStream) {
+  public onCommunicationState(callback: OnReceived<CommunicationState>) {
+    this.innerOnCommunicationState[1] = callback;
+  }
+  public onReceiveMediaStream(callback: OnReceived<MediaStream>) {
     this.innerOnReceiveMediaStream[1] = callback;
   }
+
+  // TODO REMOVE BEFORE
+  /**
+   * @deprecated This method is deprecated and will be removed in future releases. Use `onCommunicationLevel` instead.
+   */
   public onConnectionStateChange(
     callback: (state: RTCPeerConnectionState) => void,
   ) {
@@ -154,11 +189,25 @@ export class WebRTC {
   }
 
   public async closeConnection() {
-    this.innerChannel?.send(JSON.stringify({ type: 'close-connection' }));
+    try {
+      if (this.communicationState === 'weak') {
+        this.ws?.send(
+          JSON.stringify({
+            type: 'weak-close-connection',
+            data: { channelId: this.channelId },
+          }),
+        );
+      } else {
+        this.innerChannel?.send(JSON.stringify({ type: 'close-connection' }));
+      }
+    } catch (error) {}
+
+    this.changeCommunicationState('none');
     this.isOfferer = true;
+    this.channelId = undefined;
     this.peerConnection?.close();
     this.ws?.close();
-    this.innerStateChange.forEach((callback) => callback?.('closed'));
+    this.connectionTimeoutId && clearTimeout(this.connectionTimeoutId);
     window.removeEventListener('beforeunload', this.closeConnection.bind(this));
   }
 
@@ -168,13 +217,24 @@ export class WebRTC {
         const id = this.generateId();
 
         this.tempTransferData.set(id, {
-          type: data,
+          type: 'data',
           timestamp: new Date().getTime(),
           callback,
           resolve,
         });
 
-        this.dataChannel.send(JSON.stringify({ type: 'data', data, id }));
+        if (this.communicationState === 'weak') {
+          this.ws.send(
+            JSON.stringify({
+              type: 'weak-data',
+              data: { ...data, channelId: this.channelId, id },
+            }),
+          );
+        } else {
+          this.dataChannel.send(
+            JSON.stringify({ type: 'data', data: { ...data, id } }),
+          );
+        }
       } else {
         reject('Not connected');
       }
@@ -185,6 +245,10 @@ export class WebRTC {
     file: File,
     callback?: ({ percentage }: { percentage: number }) => void,
   ) {
+    if (this.communicationState !== 'full') {
+      throw new Error('Communication level must be full.');
+    }
+
     if (this.isConnected()) {
       // Validate files
       /* if (!allowedFileTypes.includes(file.type)) {
@@ -202,12 +266,14 @@ export class WebRTC {
         callback,
       });
 
-      fileReader.addEventListener('error', (error) =>
-        console.error('Error reading file:', error),
+      fileReader.addEventListener(
+        'error',
+        (error) => this.isLog && console.error('Error reading file:', error),
       );
 
-      fileReader.addEventListener('abort', (event) =>
-        console.warn('File reading aborted:', event),
+      fileReader.addEventListener(
+        'abort',
+        (event) => this.isLog && console.warn('File reading aborted:', event),
       );
 
       fileReader.addEventListener('load', (event) => {
@@ -262,9 +328,13 @@ export class WebRTC {
   public async setMediaTracks(
     { audioTrack, videoTrack }: Tracks,
     mediaStream: MediaStream,
-    callback?: () => void,
+    callback?: (v: string) => void,
   ) {
-    return new Promise<void>((resolve, reject) => {
+    if (this.communicationState !== 'full') {
+      throw new Error('Communication level must be full.');
+    }
+
+    return new Promise<string>((resolve, reject) => {
       const tracks: MediaStreamTrack[] = [];
 
       if (audioTrack) {
@@ -302,6 +372,10 @@ export class WebRTC {
   }
 
   public removeMediaTrack(kind: 'audio' | 'video') {
+    if (this.communicationState !== 'full') {
+      throw new Error('Communication level must be full.');
+    }
+
     if (this.isConnected()) {
       const sender = this.senders.get(kind);
       if (sender) {
@@ -332,42 +406,125 @@ export class WebRTC {
     return tracks;
   }
 
-  public startConnection(peerId: string) {
-    if (this.peerConnection?.connectionState === 'connected') {
-      console.warn('Connection already established.');
-      return;
-    }
+  /**
+   * @param {Object} [opts] - Optional settings for establishing the connection.
+   * @param {string} [opts.secureCode] - A unique secure code used to authenticate the peer connection. If provided, this code will override any existing secure code.
+   * @param {UniqueCodeCallback} [opts.callback] - A callback function to handle the unique peer connection code. This function will be invoked once the unique code is generated.
+   */
+  public startConnection(
+    peerId: string,
+    opts: {
+      secureCode?: string;
+      callback?: UniqueCodeCallback;
+      peerId?: string;
+      isSecure?: boolean;
+      isLog?: boolean;
+    } = {},
+  ) {
+    return new Promise<string>((resolve, reject) => {
+      if (opts.peerId) {
+        this.offerId = opts.peerId;
+      }
 
-    if (!this.offerId) {
-      throw Error('Current peer id is required.');
-    }
+      if (opts?.isSecure !== undefined) {
+        this.isSecure = opts?.isSecure;
+      }
 
-    if (!peerId) {
-      throw Error('Peer is required.');
-    }
+      if (opts?.isLog !== undefined) {
+        this.isLog = opts?.isLog;
+      }
 
-    if (this.offerId === peerId) {
-      throw Error('Cannot connect with the same peer.');
-    }
+      if (
+        this.peerConnection?.connectionState === 'connected' ||
+        ['weak', 'full'].includes(this.communicationState)
+      ) {
+        this.isLog && console.warn('Connection already established.');
+        return;
+      }
 
-    this.isOfferer = true;
-    this.createRTC();
-    this.answererId = peerId;
-    this.channelId = [this.offerId, this.answererId]
-      .sort((a, b) => a.localeCompare(b))
-      .join('-');
-    this.connectWebSocket();
+      if (this.communicationState === 'connecting') {
+        reject({
+          code: ERRORS_CODES.IN_PROGRESS_CONNECTION_ERRO,
+          reason: 'Connection in progress.',
+        });
+        return;
+      }
+
+      if (!this.offerId) {
+        reject({
+          code: ERRORS_CODES.CURRENT_PEER_IS_REQUIRED,
+          reason: 'Current peer id is required.',
+        });
+        return;
+      }
+
+      if (!peerId) {
+        reject({
+          code: ERRORS_CODES.PEER_ID_REQUIRED,
+          reason: 'Peer is required.',
+        });
+        return;
+      }
+
+      if (this.offerId === peerId) {
+        reject({
+          code: ERRORS_CODES.SAME_PEER_ERROR,
+          reason: 'Cannot connect with the same peer.',
+        });
+        return;
+      }
+
+      this.uniqueCodeCallback[0] = resolve;
+      this.uniqueCodeCallback[1] = opts?.callback;
+
+      this.changeCommunicationState('connecting');
+
+      this.isOfferer = true;
+      this.createRTC();
+      this.answererId = peerId;
+      this.channelId = [this.offerId, this.answererId]
+        .sort((a, b) => a.localeCompare(b))
+        .join('-');
+
+      if (opts?.secureCode && this.secureCode !== opts.secureCode) {
+        this.secureCode = opts?.secureCode;
+      }
+
+      this.connectWebSocket(reject);
+
+      // Close connection
+      if (this.connectionTimeoutId === null) {
+        this.connectionTimeoutId = setTimeout(() => {
+          if (this.communicationState === 'connecting') {
+            this.closeConnection();
+            this.isLog &&
+              console.warn(
+                'Connection still in "connecting" state, closing...',
+              );
+          }
+          this.connectionTimeoutId = null;
+        }, WAIT_TIME);
+      }
+    });
   }
 
   private async renegotiateConnection() {
     if (this.peerConnection.signalingState !== 'stable') {
-      console.warn(
-        'Cannot renegotiate connection while signaling state is not stable.',
-      );
+      this.isLog &&
+        console.warn(
+          'Cannot renegotiate connection while signaling state is not stable.',
+        );
       return;
     }
 
     this.checkAndSendOffer(true);
+  }
+
+  private changeCommunicationState(state: CommunicationState) {
+    this.communicationState = state;
+    this.innerOnCommunicationState.forEach((callback) =>
+      callback?.(this.communicationState),
+    );
   }
 
   private generateId(): string {
@@ -375,19 +532,31 @@ export class WebRTC {
     return generatePart() + generatePart() + generatePart() + generatePart();
   }
 
-  private connectWebSocket() {
+  private connectWebSocket(reject: ({ code, reason }: RejectProps) => void) {
     try {
       this.ws?.close();
       this.ws = new WebSocket(
-        `${this.orchestratorUrl}?client-key=${this.clientKey}`,
+        `${this.orchestratorUrl}?client-key=${this.clientKey}&is-secure=${
+          this.isSecure
+        }${this.secureCode ? `&secure-code=${this.secureCode}` : ''}`,
       );
       this.ws.onclose = ({ code, reason }) => {
-        if (code === 1008) console.error(reason);
+        if (
+          [
+            ERRORS_CODES.RESTRICTION_ERROR,
+            ERRORS_CODES.TIMEOUT_ERROR,
+            ERRORS_CODES.BAD_REQUEST_ERROR,
+          ].includes(code)
+        ) {
+          this.isLog && console.error(reason);
+          this.closeConnection();
+          reject({ code, reason });
+        }
       };
       this.ws.onmessage = this.onMessage.bind(this);
       this.ws.onopen = () => this.checkAndSendOffer();
     } catch (error) {
-      console.log(error);
+      this.isLog && console.error(error);
     }
   }
 
@@ -409,19 +578,23 @@ export class WebRTC {
       iceRestart: true,
     });
 
-    (renegotiate ? this.innerChannel : this.ws).send(
-      JSON.stringify({
-        type: 'offer',
-        data: {
-          channelId: this.channelId,
-          offerId: this.offerId,
-          offer: {
-            sdp: offerDescription.sdp,
-            type: offerDescription.type,
+    try {
+      (renegotiate ? this.innerChannel : this.ws)?.send(
+        JSON.stringify({
+          type: 'offer',
+          data: {
+            channelId: this.channelId,
+            offerId: this.offerId,
+            offer: {
+              sdp: offerDescription.sdp,
+              type: offerDescription.type,
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
+    } catch (error) {
+      this.isLog && console.error(error);
+    }
   }
 
   private async setupAsOfferer(
@@ -467,6 +640,7 @@ export class WebRTC {
 
     this.setOnTrack();
 
+    // TODO REMOVE BEFORE
     this.peerConnection.onconnectionstatechange = () => {
       this.innerStateChange.forEach((callback) =>
         callback?.(this.peerConnection.connectionState),
@@ -474,11 +648,12 @@ export class WebRTC {
       if (
         ['failed', 'disconnected'].includes(this.peerConnection.connectionState)
       ) {
-        this.restartConnection();
+        this.closeConnection();
       }
     };
   }
 
+  // TODO IMPROVE THIS
   private restartConnection() {
     this.checkAndSendOffer();
   }
@@ -514,6 +689,7 @@ export class WebRTC {
         type: 'answer',
         data: {
           channelId: this.channelId,
+          /* secureCode: this.secureCode, */
           answer: {
             sdp: answerDescription.sdp,
             type: answerDescription.type,
@@ -578,9 +754,33 @@ export class WebRTC {
     }
   }
 
+  private innerDeliveryValidation(
+    id: string,
+    tempData?: TempTransferData,
+    data?: any,
+  ) {
+    if ('data' === tempData?.type) {
+      const delivered = {
+        ms: (new Date().getTime() - (tempData!.timestamp || 0)) / 2,
+      };
+      this.tempTransferData.delete(id);
+      tempData.resolve?.(delivered);
+      tempData.callback?.(delivered);
+    }
+
+    if ('file' === tempData?.type) {
+      const { info } = data;
+      tempData.callback?.({
+        percentage: info.percentage,
+      });
+      if (info.percentage === 100) {
+        this.tempTransferData.delete(id);
+      }
+    }
+  }
+
   private configurateInnerChannel(innerChannel: RTCDataChannel) {
     innerChannel.onopen = () => {};
-    innerChannel.onclose = () => {};
 
     innerChannel.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -614,35 +814,16 @@ export class WebRTC {
       }
 
       if (data.type === 'media-started') {
-        this.mediaCallback.forEach((callback) => callback?.());
+        this.mediaCallback.forEach((callback) => callback?.('connected'));
       }
 
       if (data.type === 'delivery-validation') {
-        const { id, info } = data;
-
-        const tempData = this.tempTransferData.get(id);
-        if (tempData) {
-          let delivered = {};
-
-          if (tempData.type === 'data') {
-            delivered = {
-              ms: new Date().getTime() - (tempData!.timestamp || 0),
-            };
-            this.tempTransferData.delete(id);
-          }
-
-          if (tempData.type === 'file') {
-            delivered = {
-              percentage: info.percentage,
-            };
-            if (info.percentage === 100) {
-              this.tempTransferData.delete(id);
-            }
-          }
-
-          tempData.resolve?.(delivered);
-          tempData.callback?.(delivered);
-        }
+        const { id } = data.data;
+        this.innerDeliveryValidation(
+          id,
+          this.tempTransferData.get(id),
+          data.data,
+        );
       }
     };
 
@@ -694,8 +875,10 @@ export class WebRTC {
         this.innerChannel.send(
           JSON.stringify({
             type: 'delivery-validation',
-            id: fileId,
-            info: { percentage },
+            data: {
+              id: fileId,
+              info: { percentage },
+            },
           }),
         );
 
@@ -723,8 +906,26 @@ export class WebRTC {
     this.fileChannel = fileChannel;
   }
 
+  private onInnerDataReceived(data: any) {
+    if (this.communicationState === 'weak') {
+      this.ws.send(
+        JSON.stringify({
+          type: 'weak-delivery-validation',
+          data: { channelId: this.channelId, id: data.id },
+        }),
+      );
+      this.innerOnMessage.forEach((callback) => callback?.(data));
+    } else {
+      this.innerChannel.send(
+        JSON.stringify({ type: 'delivery-validation', data: { id: data.id } }),
+      );
+      this.innerOnMessage.forEach((callback) => callback?.(data));
+    }
+  }
+
   private configureDataChannel(dataChannel: RTCDataChannel) {
     dataChannel.onopen = () => {
+      this.changeCommunicationState('full');
       this.ws?.close();
     };
 
@@ -734,12 +935,7 @@ export class WebRTC {
       const data = JSON.parse(event.data);
 
       /* COMMON DATA TRANSFER */
-      if (data.type === 'data') {
-        this.innerChannel.send(
-          JSON.stringify({ type: 'delivery-validation', id: data.id }),
-        );
-        this.innerOnMessage.forEach((callback) => callback?.(data.data));
-      }
+      if (data.type === 'data') this.onInnerDataReceived(data.data);
     };
 
     this.dataChannel = dataChannel;
@@ -748,7 +944,27 @@ export class WebRTC {
   private onMessage(event: MessageEvent) {
     const message = JSON.parse(event.data);
 
+    // WEAK COMMUNCATION
+    if (message.type === 'weak-close-connection') {
+      this.closeConnection();
+    }
+    if (message.type === 'weak-communication') {
+      this.changeCommunicationState('weak');
+    }
+    if (message.type === 'weak-data') {
+      this.onInnerDataReceived(message.data);
+    }
+    if (message.type === 'weak-delivery-validation') {
+      const { id } = message.data;
+      const tempData = this.tempTransferData.get(id);
+      this.innerDeliveryValidation(id, tempData);
+    }
+    // ===========
+
     if (message.type === 'waiting-answer') {
+      this.uniqueCodeCallback.forEach((callback) =>
+        callback?.(message.secureCode),
+      );
       this.setupAsOfferer(message.existingOffer);
     }
 
