@@ -41,27 +41,29 @@ CurrentUser needs to connect with User1, User2, and User3.
 
 ```javascript
 const webRTC = new WebRTC({
-  peerId: peer1-id, // Unique identifier of current peer (Peer1) this value is optional.
+  peerId: peer1-id, // Unique identifier of current peer (Peer1) (optional)
   isSecure: true // if is true, the method startConnection will return a unique secure code to connect with the other peer (optional)
   clientKey: '66760d2b14813c0e8b53b4ff', // Default client key (it will be deleted in the future).
-  onReceiveData: (data) => {}, // Data from Peer2
-  isLog: true, // Allows internal logs to be printed for debugging and monitoring.
-  onReceiveFile: ({ fileName, percentage, file }) => {}, // File from Peer2
-  onCommunicationState: (state) => {}, // Connection state from Peer2: can be 'none' (no connection), 'connecting' (waiting to connect), 'weak' (text only, no file or video), or 'full' (allows text, file, and video).
-  onReceiveMediaStream: (stream) => {}, // Media streem from Peer2
+  onReceiveData: (data) => {}, // Data from Peer2 (optional)
+  isLog: true, // Allows internal logs to be printed for debugging and monitoring. (optional)
+  onReceiveFile: ({ fileName, percentage, file }) => {}, // File from Peer2 (optional)
+  onCommunicationState: (state) => {}, // Connection state from Peer2: can be 'none' (no connection), 'connecting' (waiting to connect), 'weak' (text only, no file or video), or 'full' (allows text, file, and video). (optional)
+  onReceiveMediaStream: (stream) => {}, // Media streem from Peer2 (optional)
 });
 
 Starts a connection with Peer2. You can use `await` to retrieve the secure code if `isSecure` is set to `true` or you can pass a callback function as part of the `opts` object. The `opts` object allows you to configure various connection options, including:
 
-- `callback`: (optional) A function that will be invoked once the secure code is generated, if `isSecure` is true. The function should accept a single argument `secureCode`.
+- callback: (optional) A function that will be invoked once the secure code is generated, if `isSecure` is true. The function should accept a single argument `secureCode`.
 
-- `secureCode`: (optional) A pre-generated secure code that will be used during the connection setup, if `isSecure` is true.
+- secureCode: (optional) A pre-generated secure code that will be used during the connection setup, if `isSecure` is true.
 
-- `peerId`: (optional) The ID of the current peer initiating the connection.
+- peerId: (optional) The ID of the current peer initiating the connection.
 
-- `isSecure`: (optional) A boolean flag indicating whether the connection should be secured with a secure code. When `true`, the secure code will be generated and returned.
+- isSecure: (optional) A boolean flag indicating whether the connection should be secured with a secure code. When `true`, the secure code will be generated and returned.
 
 - `isLog`: (optional) A boolean flag indicating whether to log the connection process for debugging purposes.
+
+
 const secureCode = await webRTC.startConnection(peer2Id, {
     callback: (secureCode?: string) => void,
     secureCode: secureCodeFrom,
