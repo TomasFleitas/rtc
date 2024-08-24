@@ -188,27 +188,36 @@ export class WebRTC {
     }
   }
 
-  public async closeConnection() {
+  public closeConnection() {
     try {
-      if (this.communicationState === 'weak') {
-        this.ws?.send(
-          JSON.stringify({
-            type: 'weak-close-connection',
-            data: { channelId: this.channelId },
-          }),
-        );
-      } else {
-        this.innerChannel?.send(JSON.stringify({ type: 'close-connection' }));
+      try {
+        if (this.communicationState === 'weak') {
+          this.ws?.send(
+            JSON.stringify({
+              type: 'weak-close-connection',
+              data: { channelId: this.channelId },
+            }),
+          );
+        } else {
+          this.innerChannel?.send(JSON.stringify({ type: 'close-connection' }));
+        }
+      } catch (error) {
+        this.isLog && console.log(error);
       }
-    } catch (error) {}
 
-    this.changeCommunicationState('none');
-    this.isOfferer = true;
-    this.channelId = undefined;
-    this.peerConnection?.close();
-    this.ws?.close();
-    this.connectionTimeoutId && clearTimeout(this.connectionTimeoutId);
-    window.removeEventListener('beforeunload', this.closeConnection.bind(this));
+      this.changeCommunicationState('none');
+      this.isOfferer = true;
+      this.channelId = undefined;
+      this.peerConnection?.close();
+      this.ws?.close();
+      this.connectionTimeoutId && clearTimeout(this.connectionTimeoutId);
+      window.removeEventListener(
+        'beforeunload',
+        this.closeConnection.bind(this),
+      );
+    } catch (error) {
+      this.isLog && console.error(error);
+    }
   }
 
   public async sendData(data: any, callback?: TempTransferData['callback']) {
@@ -223,17 +232,22 @@ export class WebRTC {
           resolve,
         });
 
-        if (this.communicationState === 'weak') {
-          this.ws.send(
-            JSON.stringify({
-              type: 'weak-data',
-              data: { ...data, channelId: this.channelId, id },
-            }),
-          );
-        } else {
-          this.dataChannel.send(
-            JSON.stringify({ type: 'data', data: { ...data, id } }),
-          );
+        try {
+          if (this.communicationState === 'weak') {
+            this.ws.send(
+              JSON.stringify({
+                type: 'weak-data',
+                data: { data, channelId: this.channelId, id },
+              }),
+            );
+          } else {
+            this.dataChannel.send(
+              JSON.stringify({ type: 'data', data: { data, id } }),
+            );
+          }
+        } catch (error) {
+          this.isLog && console.error(error);
+          reject(error);
         }
       } else {
         reject('Not connected');
@@ -907,19 +921,26 @@ export class WebRTC {
   }
 
   private onInnerDataReceived(data: any) {
-    if (this.communicationState === 'weak') {
-      this.ws.send(
-        JSON.stringify({
-          type: 'weak-delivery-validation',
-          data: { channelId: this.channelId, id: data.id },
-        }),
-      );
-      this.innerOnMessage.forEach((callback) => callback?.(data));
-    } else {
-      this.innerChannel.send(
-        JSON.stringify({ type: 'delivery-validation', data: { id: data.id } }),
-      );
-      this.innerOnMessage.forEach((callback) => callback?.(data));
+    try {
+      if (this.communicationState === 'weak') {
+        this.ws.send(
+          JSON.stringify({
+            type: 'weak-delivery-validation',
+            data: { channelId: this.channelId, id: data.id },
+          }),
+        );
+        this.innerOnMessage.forEach((callback) => callback?.(data.data));
+      } else {
+        this.innerChannel.send(
+          JSON.stringify({
+            type: 'delivery-validation',
+            data: { id: data.id },
+          }),
+        );
+        this.innerOnMessage.forEach((callback) => callback?.(data.data));
+      }
+    } catch (error) {
+      this.isLog && console.error(error);
     }
   }
 
