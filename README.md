@@ -61,7 +61,7 @@ Starts a connection with Peer2. You can use `await` to retrieve the secure code 
 
 - isSecure: (optional) A boolean flag indicating whether the connection should be secured with a secure code. When `true`, the secure code will be generated and returned.
 
-- `isLog`: (optional) A boolean flag indicating whether to log the connection process for debugging purposes.
+- isLog: (optional) A boolean flag indicating whether to log the connection process for debugging purposes.
 
 
 const secureCode = await webRTC.startConnection(peer2Id, {
