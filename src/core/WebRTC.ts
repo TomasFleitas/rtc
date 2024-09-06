@@ -1,4 +1,4 @@
-import { ERRORS_CODES, WAIT_TIME } from '../utilities/constants';
+import { ERRORS_CODES, ORCHESTRATOR_URL, WAIT_TIME } from '../utilities/constants';
 
 type PeerType = 'unknown' | 'answerer' | 'offerer';
 
@@ -16,12 +16,17 @@ type FileTransfer = {
 
 type CommunicationState = 'weak' | 'full' | 'connecting' | 'none';
 
-type ConstructorParams = {
-  clientKey: string;
-  isSecure?: boolean;
-  isLog?: boolean;
+
+type RTCOptions = {
   secureCode?: string;
   peerId?: string;
+  isSecure?: boolean;
+  isLog?: boolean;
+  closeConnectionTimeout?: number
+}
+
+type ConstructorParams = {
+  clientKey: string;
   orchestratorUrl?: string;
   onReceiveData?: OnReceived<any>;
   onReceiveFile?: OnReceived<FileTransfer>;
@@ -31,7 +36,7 @@ type ConstructorParams = {
    */
   onConnectionStateChange?: OnReceived<RTCPeerConnectionState>;
   onCommunicationState?: OnReceived<CommunicationState>;
-};
+} & RTCOptions
 
 type Tracks = {
   audioTrack?: MediaStreamTrack;
@@ -54,7 +59,8 @@ export class WebRTC {
   private peerConnection: RTCPeerConnection;
   private offerId?: string;
   private answererId: string;
-  private orchestratorUrl = 'wss://rtc.ewents.io';
+  private orchestratorUrl = ORCHESTRATOR_URL;
+  private closeConnectionTimeout = WAIT_TIME;
   private clientKey: string;
   private isOfferer = true;
   private isLog?: boolean = false;
@@ -90,6 +96,7 @@ export class WebRTC {
     isSecure = false,
     isLog = false,
     secureCode,
+    closeConnectionTimeout = WAIT_TIME
   }: ConstructorParams) {
     this.orchestratorUrl = orchestratorUrl ?? this.orchestratorUrl;
     this.clientKey = clientKey;
@@ -97,6 +104,8 @@ export class WebRTC {
     this.isLog = isLog;
     this.secureCode = secureCode;
     this.offerId = peerId;
+
+    this.setConnectionTimeout(closeConnectionTimeout)
 
     if (onReceiveData) {
       this.innerOnMessage[0] = onReceiveData;
@@ -211,6 +220,7 @@ export class WebRTC {
       this.peerConnection?.close();
       this.ws?.close();
       this.connectionTimeoutId && clearTimeout(this.connectionTimeoutId);
+      this.connectionTimeoutId = null;
       window.removeEventListener(
         'beforeunload',
         this.closeConnection.bind(this),
@@ -420,22 +430,16 @@ export class WebRTC {
     return tracks;
   }
 
-  /**
-   * @param {Object} [opts] - Optional settings for establishing the connection.
-   * @param {string} [opts.secureCode] - A unique secure code used to authenticate the peer connection. If provided, this code will override any existing secure code.
-   * @param {UniqueCodeCallback} [opts.callback] - A callback function to handle the unique peer connection code. This function will be invoked once the unique code is generated.
-   */
   public startConnection(
     peerId: string,
     opts: {
-      secureCode?: string;
       callback?: UniqueCodeCallback;
-      peerId?: string;
-      isSecure?: boolean;
-      isLog?: boolean;
-    } = {},
+    } & RTCOptions = {},
   ) {
     return new Promise<string>((resolve, reject) => {
+
+      this.setConnectionTimeout(opts.closeConnectionTimeout)
+
       if (opts.peerId) {
         this.offerId = opts.peerId;
       }
@@ -517,7 +521,7 @@ export class WebRTC {
               );
           }
           this.connectionTimeoutId = null;
-        }, WAIT_TIME);
+        }, this.closeConnectionTimeout);
       }
     });
   }
@@ -541,6 +545,15 @@ export class WebRTC {
     );
   }
 
+  private setConnectionTimeout(closeConnectionTimeout?: number) {
+    if (closeConnectionTimeout && closeConnectionTimeout > WAIT_TIME) {
+      this.isLog && console.warn(`Connection timeout exceeds the allowed wait time of ${WAIT_TIME}ms. Setting timeout to ${WAIT_TIME}ms.`);
+      this.closeConnectionTimeout = WAIT_TIME;
+    } else if (closeConnectionTimeout) {
+      this.closeConnectionTimeout = closeConnectionTimeout;
+    }
+  }
+
   private generateId(): string {
     const generatePart = () => Math.random().toString(36).substring(2, 15);
     return generatePart() + generatePart() + generatePart() + generatePart();
@@ -550,8 +563,7 @@ export class WebRTC {
     try {
       this.ws?.close();
       this.ws = new WebSocket(
-        `${this.orchestratorUrl}?client-key=${this.clientKey}&is-secure=${
-          this.isSecure
+        `${this.orchestratorUrl}?client-key=${this.clientKey}&is-secure=${this.isSecure
         }${this.secureCode ? `&secure-code=${this.secureCode}` : ''}`,
       );
       this.ws.onclose = ({ code, reason }) => {
@@ -794,7 +806,7 @@ export class WebRTC {
   }
 
   private configurateInnerChannel(innerChannel: RTCDataChannel) {
-    innerChannel.onopen = () => {};
+    innerChannel.onopen = () => { };
 
     innerChannel.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -854,8 +866,8 @@ export class WebRTC {
       };
     } = {};
 
-    fileChannel.onopen = () => {};
-    fileChannel.onclose = () => {};
+    fileChannel.onopen = () => { };
+    fileChannel.onclose = () => { };
     fileChannel.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'file') {
@@ -950,7 +962,7 @@ export class WebRTC {
       this.ws?.close();
     };
 
-    dataChannel.onclose = () => {};
+    dataChannel.onclose = () => { };
 
     dataChannel.onmessage = (event) => {
       const data = JSON.parse(event.data);

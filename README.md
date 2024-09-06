@@ -3,7 +3,7 @@
 This document explains how to integrate and use the `ewents-rtc` library in your projects. `ewents-rtc` is a library that enables peer-to-peer communication, allowing you to send information from one end to another. From here on, we will refer to the two ends as Peer1 and Peer2 to describe both parties.
 
 Demo:
-https://ewents-rtc-example.web.app/
+https://demo-rtc.ewents.io/
 
 Demo code:
 https://github.com/TomasFleitas/rtc-example
@@ -44,8 +44,9 @@ const webRTC = new WebRTC({
   peerId: peer1-id, // Unique identifier of current peer (Peer1) (optional)
   isSecure: true // if is true, the method startConnection will return a unique secure code to connect with the other peer (optional)
   clientKey: '66760d2b14813c0e8b53b4ff', // Default client key (it will be deleted in the future). (Mandatory)
-  onReceiveData: (data) => {}, // Data from Peer2 (optional)
   isLog: true, // Allows internal logs to be printed for debugging and monitoring. (optional)
+  closeConnectionTimeout: 60000 // Close connection timeout in ms, max 60000 ms (1min) (optional)
+  onReceiveData: (data) => {}, // Data from Peer2 (optional)
   onReceiveFile: ({ fileName, percentage, file }) => {}, // File from Peer2 (optional)
   onCommunicationState: (state) => {}, // Connection state from Peer2: can be 'none' (no connection), 'connecting' (waiting to connect), 'weak' (text only, no file or video), or 'full' (allows text, file, and video). (optional)
   onReceiveMediaStream: (stream) => {}, // Media streem from Peer2 (optional)
@@ -63,12 +64,15 @@ Starts a connection with Peer2. You can use `await` to retrieve the secure code 
 
 - isLog: (optional) A boolean flag indicating whether to log the connection process for debugging purposes.
 
+- closeConnectionTimeout: (optional) A number close connection timeout in ms.
+
 
 const secureCode = await webRTC.startConnection(peer2Id, {
     callback: (secureCode?: string) => void,
     secureCode: secureCodeFrom,
     peerId: peer-id,
     isSecure: true,
+    closeConnectionTimeout: 60000,
     isLog: true,
 });
 ```

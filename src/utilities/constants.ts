@@ -1,5 +1,7 @@
 export const WAIT_TIME = 1 * 60000; // Min
 
+export const ORCHESTRATOR_URL = 'wss://rtc.ewents.io'
+
 export const ERRORS_CODES = {
   IN_PROGRESS_CONNECTION_ERRO: 1000,
   CURRENT_PEER_IS_REQUIRED: 1001,
