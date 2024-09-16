@@ -16,7 +16,6 @@ type FileTransfer = {
 
 type CommunicationState = 'weak' | 'full' | 'connecting' | 'none';
 
-
 type RTCOptions = {
   secureCode?: string;
   peerId?: string;
@@ -214,7 +213,6 @@ export class WebRTC {
         this.isLog && console.log(error);
       }
 
-      this.changeCommunicationState('none');
       this.isOfferer = true;
       this.channelId = undefined;
       this.peerConnection?.close();
@@ -225,6 +223,8 @@ export class WebRTC {
         'beforeunload',
         this.closeConnection.bind(this),
       );
+      // Trigger comunication state none after all closes
+      this.changeCommunicationState('none');
     } catch (error) {
       this.isLog && console.error(error);
     }
