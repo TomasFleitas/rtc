@@ -55,7 +55,7 @@ type TempTransferData = {
 type RejectProps = { code: number; reason: string };
 
 export class WebRTC {
-  private peerConnection: RTCPeerConnection;
+  private peerConnection?: RTCPeerConnection;
   private offerId?: string;
   private answererId: string;
   private orchestratorUrl = ORCHESTRATOR_URL;
@@ -69,7 +69,7 @@ export class WebRTC {
   private dataChannel: RTCDataChannel;
   private innerChannel: RTCDataChannel;
   private fileChannel: RTCDataChannel;
-  private ws: WebSocket;
+  private ws?: WebSocket;
   private innerStateChange: OnReceived<RTCPeerConnectionState>[] = new Array(2);
   private innerOnMessage: OnReceived<any>[] = new Array(2);
   private innerOnReceiveFile: OnReceived<FileTransfer>[] = new Array(2);
@@ -184,10 +184,10 @@ export class WebRTC {
     this.innerStateChange[1] = callback;
     if (this.peerConnection) {
       this.peerConnection.onconnectionstatechange = () => {
-        callback(this.peerConnection.connectionState);
+        callback(this.peerConnection?.connectionState || "closed");
         if (
           ['failed', 'disconnected'].includes(
-            this.peerConnection.connectionState,
+            this.peerConnection?.connectionState || "",
           )
         ) {
           this.restartConnection();
@@ -198,25 +198,29 @@ export class WebRTC {
 
   public closeConnection() {
     try {
-      try {
-        if (this.communicationState === 'weak') {
-          this.ws?.send(
-            JSON.stringify({
-              type: 'weak-close-connection',
-              data: { channelId: this.channelId },
-            }),
-          );
-        } else {
-          this.innerChannel?.send(JSON.stringify({ type: 'close-connection' }));
+      if (this.isConnected()) {
+        try {
+          if (this.communicationState === 'weak') {
+            this.ws?.send(
+              JSON.stringify({
+                type: 'weak-close-connection',
+                data: { channelId: this.channelId },
+              }),
+            );
+          } else if (this.communicationState === 'full') {
+            this.innerChannel?.send(JSON.stringify({ type: 'close-connection' }));
+          }
+        } catch (error) {
+          this.isLog && console.log(error);
         }
-      } catch (error) {
-        this.isLog && console.log(error);
       }
 
       this.isOfferer = true;
       this.channelId = undefined;
       this.peerConnection?.close();
+      this.peerConnection = undefined;
       this.ws?.close();
+      this.ws = undefined;
       this.connectionTimeoutId && clearTimeout(this.connectionTimeoutId);
       this.connectionTimeoutId = null;
       window.removeEventListener(
@@ -244,7 +248,7 @@ export class WebRTC {
 
         try {
           if (this.communicationState === 'weak') {
-            this.ws.send(
+            this.ws?.send(
               JSON.stringify({
                 type: 'weak-data',
                 data: { data, channelId: this.channelId, id },
@@ -378,7 +382,7 @@ export class WebRTC {
               existingSender.replaceTrack(track);
             } else {
               // Add a new track
-              const sender = this.peerConnection.addTrack(track, mediaStream);
+              const sender = this.peerConnection?.addTrack(track, mediaStream)!;
               this.senders.set(track.kind, sender);
             }
           });
@@ -403,7 +407,7 @@ export class WebRTC {
     if (this.isConnected()) {
       const sender = this.senders.get(kind);
       if (sender) {
-        this.peerConnection.removeTrack(sender);
+        this.peerConnection?.removeTrack(sender);
         if (sender.track) {
           sender.track.stop();
         }
@@ -527,7 +531,7 @@ export class WebRTC {
   }
 
   private async renegotiateConnection() {
-    if (this.peerConnection.signalingState !== 'stable') {
+    if (this.peerConnection && this.peerConnection?.signalingState !== 'stable') {
       this.isLog &&
         console.warn(
           'Cannot renegotiate connection while signaling state is not stable.',
@@ -587,12 +591,14 @@ export class WebRTC {
   }
 
   private setOnTrack() {
-    this.peerConnection.ontrack = (event) => {
-      this.innerChannel.send(JSON.stringify({ type: 'media-started' }));
-      this.innerOnReceiveMediaStream.forEach((callback) =>
-        callback?.(event.streams[0]),
-      );
-    };
+    if (this.peerConnection) {
+      this.peerConnection.ontrack = (event) => {
+        this.innerChannel.send(JSON.stringify({ type: 'media-started' }));
+        this.innerOnReceiveMediaStream.forEach((callback) =>
+          callback?.(event.streams[0]),
+        );
+      };
+    }
   }
 
   private async checkAndSendOffer(renegotiate = false) {
@@ -600,26 +606,28 @@ export class WebRTC {
       this.setupDataChannels();
     }
 
-    const offerDescription = await this.peerConnection.createOffer({
+    const offerDescription = await this.peerConnection?.createOffer({
       iceRestart: true,
     });
 
-    try {
-      (renegotiate ? this.innerChannel : this.ws)?.send(
-        JSON.stringify({
-          type: 'offer',
-          data: {
-            channelId: this.channelId,
-            offerId: this.offerId,
-            offer: {
-              sdp: offerDescription.sdp,
-              type: offerDescription.type,
+    if (offerDescription) {
+      try {
+        (renegotiate ? this.innerChannel : this.ws)?.send(
+          JSON.stringify({
+            type: 'offer',
+            data: {
+              channelId: this.channelId,
+              offerId: this.offerId,
+              offer: {
+                sdp: offerDescription.sdp,
+                type: offerDescription.type,
+              },
             },
-          },
-        }),
-      );
-    } catch (error) {
-      this.isLog && console.error(error);
+          }),
+        );
+      } catch (error) {
+        this.isLog && console.error(error);
+      }
     }
   }
 
@@ -629,18 +637,21 @@ export class WebRTC {
   ) {
     this.isOfferer = true;
 
-    await this.peerConnection.setLocalDescription(
-      new RTCSessionDescription(offer),
-    );
 
-    this.peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.sendICECandidate(
-          renegotiate ? 'renegotiate-ice-offer' : 'ice-offer',
-          event.candidate.toJSON(),
-        );
-      }
-    };
+    if (this.peerConnection) {
+      await this.peerConnection.setLocalDescription(
+        new RTCSessionDescription(offer),
+      );
+
+      this.peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          this.sendICECandidate(
+            renegotiate ? 'renegotiate-ice-offer' : 'ice-offer',
+            event.candidate.toJSON(),
+          );
+        }
+      };
+    }
   }
 
   private createRTC() {
@@ -669,10 +680,10 @@ export class WebRTC {
     // TODO REMOVE BEFORE
     this.peerConnection.onconnectionstatechange = () => {
       this.innerStateChange.forEach((callback) =>
-        callback?.(this.peerConnection.connectionState),
+        callback?.(this.peerConnection?.connectionState || "closed"),
       );
       if (
-        ['failed', 'disconnected'].includes(this.peerConnection.connectionState)
+        ['failed', 'disconnected'].includes(this.peerConnection?.connectionState || "")
       ) {
         this.closeConnection();
       }
@@ -690,45 +701,49 @@ export class WebRTC {
   ) {
     this.isOfferer = false;
     if (!renegotiate) {
-      this.peerConnection.close();
+      this.peerConnection?.close();
       this.createRTC();
       this.setupDataChannels();
     }
 
-    await this.peerConnection.setRemoteDescription(
-      new RTCSessionDescription(offer),
-    );
+    if (this.peerConnection) {
+      await this.peerConnection.setRemoteDescription(
+        new RTCSessionDescription(offer),
+      );
 
-    this.peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.sendICECandidate(
-          renegotiate ? 'renegotiate-ice-answer' : 'ice-answer',
-          event.candidate.toJSON(),
-        );
-      }
-    };
+      this.peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          this.sendICECandidate(
+            renegotiate ? 'renegotiate-ice-answer' : 'ice-answer',
+            event.candidate.toJSON(),
+          );
+        }
+      };
+    }
 
-    const answerDescription = await this.peerConnection.createAnswer();
+    const answerDescription = await this.peerConnection?.createAnswer();
 
-    (renegotiate ? this.innerChannel : this.ws).send(
-      JSON.stringify({
-        type: 'answer',
-        data: {
-          channelId: this.channelId,
-          /* secureCode: this.secureCode, */
-          answer: {
-            sdp: answerDescription.sdp,
-            type: answerDescription.type,
+    if (answerDescription) {
+      (renegotiate ? this.innerChannel : this.ws)?.send(
+        JSON.stringify({
+          type: 'answer',
+          data: {
+            channelId: this.channelId,
+            /* secureCode: this.secureCode, */
+            answer: {
+              sdp: answerDescription.sdp,
+              type: answerDescription.type,
+            },
+            ...(renegotiate && { existingOffer: offer }),
+            answerId: this.answererId,
           },
-          ...(renegotiate && { existingOffer: offer }),
-          answerId: this.answererId,
-        },
-      }),
-    );
+        }),
+      );
 
-    await this.peerConnection.setLocalDescription(
-      new RTCSessionDescription(answerDescription),
-    );
+      await this.peerConnection?.setLocalDescription(
+        new RTCSessionDescription(answerDescription),
+      );
+    }
   }
 
   private async sendICECandidate(
@@ -742,7 +757,7 @@ export class WebRTC {
     (['renegotiate-ice-answer', 'renegotiate-ice-offer'].includes(role)
       ? this.innerChannel
       : this.ws
-    ).send(
+    )?.send(
       JSON.stringify({
         type: role,
         data: {
@@ -755,28 +770,30 @@ export class WebRTC {
 
   private setupDataChannels() {
     if (this.isOfferer) {
-      const dataChannel = this.peerConnection.createDataChannel('data');
-      const fileChannel = this.peerConnection.createDataChannel('file');
+      const dataChannel = this.peerConnection?.createDataChannel('data');
+      const fileChannel = this.peerConnection?.createDataChannel('file');
       const innerChannel =
-        this.peerConnection.createDataChannel('innerChannel');
+        this.peerConnection?.createDataChannel('innerChannel');
 
-      this.configureDataChannel(dataChannel);
-      this.configurateInnerChannel(innerChannel);
-      this.configurateDataFile(fileChannel);
+      dataChannel && this.configureDataChannel(dataChannel);
+      innerChannel && this.configurateInnerChannel(innerChannel);
+      fileChannel && this.configurateDataFile(fileChannel);
     } else {
-      this.peerConnection.ondatachannel = (event) => {
-        if (event.channel.label === 'data') {
-          this.configureDataChannel(event.channel);
-        }
+      if (this.peerConnection) {
+        this.peerConnection.ondatachannel = (event) => {
+          if (event.channel.label === 'data') {
+            this.configureDataChannel(event.channel);
+          }
 
-        if (event.channel.label === 'file') {
-          this.configurateDataFile(event.channel);
-        }
+          if (event.channel.label === 'file') {
+            this.configurateDataFile(event.channel);
+          }
 
-        if (event.channel.label === 'innerChannel') {
-          this.configurateInnerChannel(event.channel);
-        }
-      };
+          if (event.channel.label === 'innerChannel') {
+            this.configurateInnerChannel(event.channel);
+          }
+        };
+      }
     }
   }
 
@@ -814,7 +831,7 @@ export class WebRTC {
       /* RENEGOTIATE  */
       if (data.type === 'answer') {
         this.setupAsOfferer(data.data.existingOffer, true);
-        this.peerConnection.setRemoteDescription(
+        this.peerConnection?.setRemoteDescription(
           new RTCSessionDescription(data.data.answer),
         );
       }
@@ -825,7 +842,7 @@ export class WebRTC {
         ['renegotiate-ice-offer', 'renegotiate-ice-answer'].includes(data.type)
       ) {
         if (data.data.candidate) {
-          this.peerConnection.addIceCandidate(
+          this.peerConnection?.addIceCandidate(
             new RTCIceCandidate(data.data.candidate),
           );
         }
@@ -935,7 +952,7 @@ export class WebRTC {
   private onInnerDataReceived(data: any) {
     try {
       if (this.communicationState === 'weak') {
-        this.ws.send(
+        this.ws?.send(
           JSON.stringify({
             type: 'weak-delivery-validation',
             data: { channelId: this.channelId, id: data.id },
@@ -1006,14 +1023,14 @@ export class WebRTC {
     }
 
     if (message.type === 'answer') {
-      this.peerConnection.setRemoteDescription(
+      this.peerConnection?.setRemoteDescription(
         new RTCSessionDescription(message.data.answer),
       );
     }
 
     if (message.type === 'ice-offer' || message.type === 'ice-answer') {
       if (message.data.candidate) {
-        this.peerConnection.addIceCandidate(
+        this.peerConnection?.addIceCandidate(
           new RTCIceCandidate(message.data.candidate),
         );
       }
